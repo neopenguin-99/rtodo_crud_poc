@@ -1,0 +1,10 @@
+[package]
+name = "todo_crud_poc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+console = "0.15.10"
+dialoguer = "0.11.0"
+rusqlite = { version = "0.33.0", features = ["bundled"] }
+clap = { version = "4.5.28", features = ["derive", "cargo", "unicode"] }
