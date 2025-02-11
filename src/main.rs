@@ -2,7 +2,7 @@ use std::thread;
 use std::time::Duration;
 
 use console::Term;
-use rusqlite::{params, Connection, Result};
+use rusqlite::{params, Connection, OpenFlags, Result};
 
 use clap::{crate_authors, crate_version, value_parser, Arg, ArgMatches, Command};
 
@@ -37,14 +37,33 @@ struct Item {
     is_done: bool
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>>{
-    let conn = Connection::open_in_memory()?;
-
+fn create_item_table(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     conn.execute("CREATE TABLE item (
         id INTEGER PRIMARY KEY,
         note TEXT NOT NULL,
         is_done NOT NULL
     )", ())?;
+    Ok(())
+}
+
+fn insert_into_item_table(conn: &Connection, note: &str) -> Result<usize, Box<dyn std::error::Error>> {
+    let rows = conn.execute("INSERT INTO item (note, is_done) VALUES (?1, ?2)", (note, false));
+    Ok(rows?)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>>{
+    let database_path = "./todo.db";
+    let mut conn = Connection::open_with_flags(database_path,
+    OpenFlags::SQLITE_OPEN_READ_WRITE
+        | OpenFlags::SQLITE_OPEN_URI
+        | OpenFlags::SQLITE_OPEN_NO_MUTEX);
+
+    if conn.is_err() {
+        conn = Ok(Connection::open(database_path).unwrap());
+        create_item_table(&conn.unwrap())?;
+    }
+
+
 
 
     // term.write_line("Hello World!")?;
@@ -52,6 +71,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
     // term.clear_line()?;
     let args = parse_args()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tempfile::{NamedTempFile, Builder, TempDir};
+
+
+    fn create_empty_item_table_for_test() -> Result<Connection, Box<dyn std::error::Error>> {
+        let conn = Connection::open_in_memory()?;
+
+        conn.execute("CREATE TABLE item (
+            id INTEGER PRIMARY KEY,
+            note TEXT NOT NULL,
+            is_done NOT NULL
+        )", ())?;
+
+        Ok(conn)
+    }
+
+    #[test]
+    fn test_insert() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_empty_item_table_for_test()?;
+        let rows = insert_into_item_table(&conn, "do laundry")?;
+        assert_eq!(rows, 1);
+        Ok(())
+    }
+
 }
 
 

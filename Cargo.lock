@@ -386,6 +386,7 @@ dependencies = [
  "console",
  "dialoguer",
  "rusqlite",
+ "tempfile",
 ]
 
 [[package]]
