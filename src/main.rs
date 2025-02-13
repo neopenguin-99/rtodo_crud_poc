@@ -2,12 +2,14 @@ use std::thread;
 use std::time::Duration;
 
 use console::Term;
+use colored::Colorize;
 use rusqlite::{params, Connection, OpenFlags, Result};
 
 use clap::{crate_authors, crate_version, value_parser, Arg, ArgMatches, Command};
 
-fn parse_args(conn: &Connection) -> Result<&'static dyn Fn(&Connection, Item)->Result<usize, Box<dyn std::error::Error>>, Box<dyn std::error::Error>> {
+fn parse_args() -> Result<(&'static dyn Fn(&Connection, ItemCommand)->Result<usize, Box<dyn std::error::Error>>, ItemCommand), Box<dyn std::error::Error>> {
     let arg_matches: ArgMatches = Command::new("clap")
+        .allow_external_subcommands(true)
         .version(crate_version!())
         .author(crate_authors!("\n"))
             .subcommands(
@@ -22,20 +24,12 @@ fn parse_args(conn: &Connection) -> Result<&'static dyn Fn(&Connection, Item)->R
         )
         .try_get_matches()?;
     match arg_matches.subcommand() {
-        Some(("add", val)) => Ok(&insert_into_item_table),
-        Some(("done", val)) => Ok(&set_item_as_done)
-        Some(("remove", val)) => Ok(&remove_item)
+        Some(("add", val)) => Ok((&insert_into_item_table, ItemCommand::Add(val.get_many::<String>("do").unwrap().map(|s| s.as_str()).collect()))),
+        Some(("done", val)) => Ok((&set_item_as_done, ItemCommand::Done(*val.get_one::<usize>("").unwrap()))),
+        Some(("remove", val)) => Ok((&remove_item, ItemCommand::Remove(*val.get_one::<usize>("").unwrap()))),
         Some((_, _)) => panic!("Please provide a subcommand"),
-        None => todo!("list")
+        None => Ok((&list_items, ItemCommand::List))
     }
-}
-
-fn identity<T>(a: T) -> T {
-    return a;
-}
-
-fn right<T>() -> &'static dyn Fn(T) -> T {
-    return &identity::<T>;
 }
 
 #[derive(Debug)]
@@ -43,6 +37,13 @@ struct Item {
     id: i32,
     note: String,
     is_done: bool
+}
+
+enum ItemCommand {
+    Add(String),
+    Done(usize),
+    Remove(usize),
+    List
 }
 
 impl Item {
@@ -64,19 +65,55 @@ fn create_item_table(conn: &Connection) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
-fn insert_into_item_table(conn: &Connection, item: Item) -> Result<usize, Box<dyn std::error::Error>> {
-    let rows = conn.execute("INSERT INTO item (note, is_done) VALUES (?1, ?2)", (item.note, false));
+fn insert_into_item_table(conn: &Connection, item: ItemCommand) -> Result<usize, Box<dyn std::error::Error>> {
+    let note = match item {
+        ItemCommand::Add(note) => note,
+        _ => panic!("note not in item command")
+    };
+    let rows = conn.execute("INSERT INTO item (note, is_done) VALUES (?1, ?2)", (note, false));
     Ok(rows?)
 }
 
-fn set_item_as_done(conn: &Connection, item: Item) -> Result<usize, Box<dyn std::error::Error>> {
-    let rows = conn.execute("UPDATE item SET is_done = ?1 WHERE id = ?2", (true, item.id));
+fn set_item_as_done(conn: &Connection, item: ItemCommand) -> Result<usize, Box<dyn std::error::Error>> {
+    let id = match item {
+        ItemCommand::Done(id) => id,
+        _ => panic!("id not in command to set item as done")
+    };
+    let rows = conn.execute("UPDATE item SET is_done = ?1 WHERE id = ?2", (true, id));
     Ok(rows?)
 }
 
-fn remove_item(conn: &Connection, item: Item) -> Result<usize, Box<dyn std::error::Error>> {
-    let rows = conn.execute("DELETE FROM item WHERE id = ?1", ((item.id),));
+fn remove_item(conn: &Connection, item: ItemCommand) -> Result<usize, Box<dyn std::error::Error>> {
+    let id = match item {
+        ItemCommand::Remove(id) => id,
+        _ => panic!("id not in command to remove")
+    };
+    let rows = conn.execute("DELETE FROM item WHERE id = ?1", ((id),));
     Ok(rows?)
+}
+
+fn list_items(conn: &Connection, item: ItemCommand) -> Result<usize, Box<dyn std::error::Error>> {
+    _ = item;
+    let mut stmt = conn.prepare("SELECT id, note, is_done FROM item")?;
+    let item_iter = stmt.query_map([], |row| {
+        Ok(Item {
+            id: row.get(0)?,
+            note: row.get(1)?,
+            is_done: row.get(2)?
+        })
+    })?;
+    let mut rows = 0;
+    for item in item_iter {
+        let item = item.unwrap();
+        if item.is_done {
+            println!("{}", item.note.strikethrough());
+        }
+        else {
+            println!("{}", item.note);
+        }
+        rows = rows + 1;
+    }
+    Ok(rows)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>>{
@@ -98,7 +135,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
     // term.write_line("Hello World!")?;
     // thread::sleep(Duration::from_millis(2000));
     // term.clear_line()?;
-    let args = parse_args(&conn.unwrap())?;
+    let (func, command) = parse_args()?;
+    let _ = func(&conn.unwrap(), command)?;
     Ok(())
 }
 
@@ -124,7 +162,7 @@ mod tests {
     #[test]
     fn test_insert() -> Result<(), Box<dyn std::error::Error>> {
         let conn = create_empty_item_table_for_test()?;
-        let rows = insert_into_item_table(&conn, Item::new("do laundry"))?;
+        let rows = insert_into_item_table(&conn, ItemCommand::Add(String::from("do laundry")))?;
         assert_eq!(rows, 1);
         Ok(())
     }
