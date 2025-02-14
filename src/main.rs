@@ -156,7 +156,23 @@ mod tests {
             is_done NOT NULL
         )", ())?;
 
+
         Ok(conn)
+    }
+
+    fn add_item_to_table_for_test(conn: &Connection, note: impl Into<String>, is_done: bool) -> Result<usize, Box<dyn std::error::Error>> {
+        let rows = conn.execute("INSERT INTO item (note, is_done) VALUES (?1, ?2)", (Into::into(note), is_done));
+        Ok(rows?)
+    }
+    
+    fn get_by_id_for_test(conn: &Connection, id: usize) -> Result<String, Box<dyn std::error::Error>> {
+
+        let mut stmt = conn.prepare("SELECT note FROM item where id = :id")?;
+
+        //let rows = stmt.query_map(&[(":id", &"one")], |row| row.get(0))?;
+        let mut rows = stmt.query_map(&[(":id", &format!("{id}"))], |row| row.get(0))?;
+        let res = rows.nth(0).unwrap()?;
+        Ok(res)?
     }
 
     #[test]
@@ -167,6 +183,25 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_list() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_empty_item_table_for_test()?;
+        _ = add_item_to_table_for_test(&conn, "do laundry", true)?;
+        _ = add_item_to_table_for_test(&conn, "get milk", false)?;
+        let rows = list_items(&conn, ItemCommand::List)?;
+        assert_eq!(rows, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_empty_item_table_for_test()?;
+        _ = add_item_to_table_for_test(&conn, "do laundry", true)?;
+        _ = add_item_to_table_for_test(&conn, "get milk", false)?;
+
+        let rows = insert_into_item_table(&conn, ItemCommand::Remove(0));
+        Ok(())
+    }
 }
 
 
