@@ -1,3 +1,4 @@
+#![feature(assert_matches)]
 use std::thread;
 use std::time::Duration;
 
@@ -7,7 +8,7 @@ use rusqlite::{params, Connection, OpenFlags, Result};
 
 use clap::{crate_authors, crate_version, value_parser, Arg, ArgMatches, Command};
 
-fn parse_args() -> Result<(&'static dyn Fn(&Connection, ItemCommand)->Result<usize, Box<dyn std::error::Error>>, ItemCommand), Box<dyn std::error::Error>> {
+fn parse_args() -> Result<ItemCommand, Box<dyn std::error::Error>> {
     let arg_matches: ArgMatches = Command::new("clap")
         .allow_external_subcommands(true)
         .version(crate_version!())
@@ -24,11 +25,11 @@ fn parse_args() -> Result<(&'static dyn Fn(&Connection, ItemCommand)->Result<usi
         )
         .try_get_matches()?;
     match arg_matches.subcommand() {
-        Some(("add", val)) => Ok((&insert_into_item_table, ItemCommand::Add(val.get_many::<String>("do").unwrap().map(|s| s.as_str()).collect()))),
-        Some(("done", val)) => Ok((&set_item_as_done, ItemCommand::Done(*val.get_one::<usize>("").unwrap()))),
-        Some(("remove", val)) => Ok((&remove_item, ItemCommand::Remove(*val.get_one::<usize>("").unwrap()))),
+        Some(("add", val)) => Ok(ItemCommand::Add(val.get_many::<String>("do").unwrap().map(|s| s.as_str()).collect())),
+        Some(("done", val)) => Ok(ItemCommand::Done(*val.get_one::<usize>("").unwrap())),
+        Some(("remove", val)) => Ok(ItemCommand::Remove(*val.get_one::<usize>("").unwrap())),
         Some((_, _)) => panic!("Please provide a subcommand"),
-        None => Ok((&list_items, ItemCommand::List))
+        None => Ok(ItemCommand::List)
     }
 }
 
@@ -46,16 +47,6 @@ enum ItemCommand {
     List
 }
 
-impl Item {
-    fn new(note: impl Into<String>) -> Item {
-        Item {
-            id: 99999999, // todo think of something better
-            is_done: false,
-            note: Into::into(note)
-        }
-    }
-}
-
 fn create_item_table(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     conn.execute("CREATE TABLE item (
         id INTEGER PRIMARY KEY,
@@ -65,31 +56,28 @@ fn create_item_table(conn: &Connection) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
-fn insert_into_item_table(conn: &Connection, item: ItemCommand) -> Result<usize, Box<dyn std::error::Error>> {
-    let note = match item {
-        ItemCommand::Add(note) => note,
-        _ => panic!("note not in item command")
-    };
+fn insert_into_item_table(conn: &Connection, note: String) -> Result<usize, Box<dyn std::error::Error>> {
     let rows = conn.execute("INSERT INTO item (note, is_done) VALUES (?1, ?2)", (note, false));
     Ok(rows?)
 }
 
-fn set_item_as_done(conn: &Connection, item: ItemCommand) -> Result<usize, Box<dyn std::error::Error>> {
-    let id = match item {
-        ItemCommand::Done(id) => id,
-        _ => panic!("id not in command to set item as done")
-    };
+fn set_item_as_done(conn: &Connection, id: usize) -> Result<usize, Box<dyn std::error::Error>> {
     let rows = conn.execute("UPDATE item SET is_done = ?1 WHERE id = ?2", (true, id));
     Ok(rows?)
 }
 
-fn remove_item(conn: &Connection, item: ItemCommand) -> Result<usize, Box<dyn std::error::Error>> {
-    let id = match item {
-        ItemCommand::Remove(id) => id,
-        _ => panic!("id not in command to remove")
-    };
+fn remove_item(conn: &Connection, id: usize) -> Result<usize, Box<dyn std::error::Error>> {
     let rows = conn.execute("DELETE FROM item WHERE id = ?1", ((id),));
     Ok(rows?)
+}
+
+fn exec(conn: &Connection, item: ItemCommand) -> Result<usize, Box<dyn std::error::Error>> {
+    match item {
+        ItemCommand::List => list_items(conn, item),
+        ItemCommand::Add(item) => insert_into_item_table(conn, item),
+        ItemCommand::Done(item) => set_item_as_done(conn, item),
+        ItemCommand::Remove(item) => remove_item(conn, item),
+    }
 }
 
 fn list_items(conn: &Connection, item: ItemCommand) -> Result<usize, Box<dyn std::error::Error>> {
@@ -106,10 +94,10 @@ fn list_items(conn: &Connection, item: ItemCommand) -> Result<usize, Box<dyn std
     for item in item_iter {
         let item = item.unwrap();
         if item.is_done {
-            println!("{}", item.note.strikethrough());
+            println!("{}: {}", item.id, item.note.strikethrough());
         }
         else {
-            println!("{}", item.note);
+            println!("{}: {}", item.id, item.note);
         }
         rows = rows + 1;
     }
@@ -135,13 +123,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
     // term.write_line("Hello World!")?;
     // thread::sleep(Duration::from_millis(2000));
     // term.clear_line()?;
-    let (func, command) = parse_args()?;
-    let _ = func(&conn.unwrap(), command)?;
+    let command = parse_args()?;
+    let _ = exec(&conn.unwrap(), command)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches::assert_matches;
+
     use super::*;
 
     use tempfile::{NamedTempFile, Builder, TempDir};
@@ -165,20 +155,27 @@ mod tests {
         Ok(rows?)
     }
     
-    fn get_by_id_for_test(conn: &Connection, id: usize) -> Result<String, Box<dyn std::error::Error>> {
 
-        let mut stmt = conn.prepare("SELECT note FROM item where id = :id")?;
+    fn get_note_by_id_for_test(conn: &Connection, id: usize) -> Result<(), Box<dyn std::error::Error>> {
+        // let rows = stmt.query_row::<String, _>(&[(":id", id.to_string().as_str())], |row| row.get(0))?;
+        // let res = stmt.query_row::<String, _>(("SELECT note FROM item WHERE id = :id", ), |r| r.get(0));
+        // let res = stmt.query_row("SELECT note FROM item WHERE id = :id", |r| r.get(0));
 
-        //let rows = stmt.query_map(&[(":id", &"one")], |row| row.get(0))?;
-        let mut rows = stmt.query_map(&[(":id", &format!("{id}"))], |row| row.get(0))?;
-        let res = rows.nth(0).unwrap()?;
-        Ok(res)?
+        let sql = format!("SELECT note FROM item WHERE id = :{}", id);
+        let _ = conn.query_row(&sql, [], |row| {
+            println!("{:?}", row.get(0).expect("one"));
+            Ok(())
+        });
+        let mut stmt = conn.prepare(&sql)?;
+
+        Ok(())
+        
     }
 
     #[test]
     fn test_insert() -> Result<(), Box<dyn std::error::Error>> {
         let conn = create_empty_item_table_for_test()?;
-        let rows = insert_into_item_table(&conn, ItemCommand::Add(String::from("do laundry")))?;
+        let rows = exec(&conn, ItemCommand::Add(String::from("do laundry")))?;
         assert_eq!(rows, 1);
         Ok(())
     }
@@ -188,7 +185,7 @@ mod tests {
         let conn = create_empty_item_table_for_test()?;
         _ = add_item_to_table_for_test(&conn, "do laundry", true)?;
         _ = add_item_to_table_for_test(&conn, "get milk", false)?;
-        let rows = list_items(&conn, ItemCommand::List)?;
+        let rows = exec(&conn, ItemCommand::List)?;
         assert_eq!(rows, 2);
         Ok(())
     }
@@ -196,10 +193,17 @@ mod tests {
     #[test]
     fn test_delete() -> Result<(), Box<dyn std::error::Error>> {
         let conn = create_empty_item_table_for_test()?;
-        _ = add_item_to_table_for_test(&conn, "do laundry", true)?;
-        _ = add_item_to_table_for_test(&conn, "get milk", false)?;
+        assert_eq!(add_item_to_table_for_test(&conn, "do laundry", true)?, 1);
+        assert_eq!(add_item_to_table_for_test(&conn, "get milk", false)?, 1);
 
-        let rows = insert_into_item_table(&conn, ItemCommand::Remove(0));
+        let a = list_items(&conn, ItemCommand::List);
+        println!("{:#?}", a);
+        let num_rows_affected = exec(&conn, ItemCommand::Remove(1))?;
+        let b = list_items(&conn, ItemCommand::List);
+        println!("{:#?}", b);
+        assert_eq!(num_rows_affected, 1);
+        let res = get_note_by_id_for_test(&conn);
+        assert_matches!(res, Err(_));
         Ok(())
     }
 }
