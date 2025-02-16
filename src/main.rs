@@ -4,11 +4,12 @@ use std::time::Duration;
 
 use console::Term;
 use colored::Colorize;
-use rusqlite::{params, Connection, OpenFlags, Result};
+use rusqlite::{Connection, OpenFlags, Result};
 
 use clap::{crate_authors, crate_version, value_parser, Arg, ArgMatches, Command};
 
 fn parse_args() -> Result<ItemCommand, Box<dyn std::error::Error>> {
+
     let arg_matches: ArgMatches = Command::new("clap")
         .allow_external_subcommands(true)
         .version(crate_version!())
@@ -16,8 +17,8 @@ fn parse_args() -> Result<ItemCommand, Box<dyn std::error::Error>> {
             .subcommands(
             [
                 Command::new("add").about("add new item to todo").arg(Arg::new("add")),
-                Command::new("done").about("set existing item to done").arg(Arg::new("done")),
-                Command::new("remove").about("remove existing item from todo list").arg(Arg::new("remove")),
+                Command::new("done").about("set existing item to done").arg(Arg::new("done").value_parser(value_parser!(usize))),
+                Command::new("remove").about("remove existing item from todo list").arg(Arg::new("remove").value_parser(value_parser!(usize))),
             ])
             .arg(Arg::new("files")
             .num_args(0..)
@@ -25,12 +26,13 @@ fn parse_args() -> Result<ItemCommand, Box<dyn std::error::Error>> {
         )
         .try_get_matches()?;
     match arg_matches.subcommand() {
-        Some(("add", val)) => Ok(ItemCommand::Add(val.get_many::<String>("do").unwrap().map(|s| s.as_str()).collect())),
-        Some(("done", val)) => Ok(ItemCommand::Done(*val.get_one::<usize>("").unwrap())),
-        Some(("remove", val)) => Ok(ItemCommand::Remove(*val.get_one::<usize>("").unwrap())),
+        Some(("add", val)) => Ok(ItemCommand::Add(val.get_many::<String>("add").unwrap().map(|s| s.as_str()).collect())),
+        Some(("done", val)) => Ok(ItemCommand::Done(*val.get_one::<usize>("done").unwrap())),
+        Some(("remove", val)) => Ok(ItemCommand::Remove(*val.get_one::<usize>("remove").unwrap())),
         Some((_, _)) => panic!("Please provide a subcommand"),
         None => Ok(ItemCommand::List)
     }
+
 }
 
 #[derive(Debug)]
@@ -131,11 +133,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
 #[cfg(test)]
 mod tests {
     use std::assert_matches::assert_matches;
+    use rusqlite::named_params;
 
     use super::*;
-
-    use tempfile::{NamedTempFile, Builder, TempDir};
-
 
     fn create_empty_item_table_for_test() -> Result<Connection, Box<dyn std::error::Error>> {
         let conn = Connection::open_in_memory()?;
@@ -156,20 +156,21 @@ mod tests {
     }
     
 
-    fn get_note_by_id_for_test(conn: &Connection, id: usize) -> Result<(), Box<dyn std::error::Error>> {
-        // let rows = stmt.query_row::<String, _>(&[(":id", id.to_string().as_str())], |row| row.get(0))?;
-        // let res = stmt.query_row::<String, _>(("SELECT note FROM item WHERE id = :id", ), |r| r.get(0));
-        // let res = stmt.query_row("SELECT note FROM item WHERE id = :id", |r| r.get(0));
-
-        let sql = format!("SELECT note FROM item WHERE id = :{}", id);
-        let _ = conn.query_row(&sql, [], |row| {
-            println!("{:?}", row.get(0).expect("one"));
-            Ok(())
-        });
-        let mut stmt = conn.prepare(&sql)?;
-
-        Ok(())
-        
+    fn get_note_by_id_for_test(conn: &Connection, id: usize) -> Result<Item, i32> {
+        let mut receiver = conn
+            .prepare("SELECT id, note, is_done FROM item WHERE id = :id;")
+            .expect("receiver failed");
+        let mut rows = receiver
+            .query(named_params!{ ":id": id })
+            .expect("rows failed");
+        while let Some(row) = rows.next().expect("while row failed") {
+            return Ok(Item {
+                id: row.get(0).expect("get id failed"),
+                note: row.get(1).expect("get note failed"),
+                is_done: row.get(2).expect("get is_done failed")
+            });
+        }
+        return Err(-1);
     }
 
     #[test]
@@ -177,6 +178,17 @@ mod tests {
         let conn = create_empty_item_table_for_test()?;
         let rows = exec(&conn, ItemCommand::Add(String::from("do laundry")))?;
         assert_eq!(rows, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_done() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_empty_item_table_for_test()?;
+        _ = add_item_to_table_for_test(&conn, "get milk", false)?;
+        let rows = exec(&conn, ItemCommand::Done(1))?;
+        assert_eq!(rows, 1);
+        let res = get_note_by_id_for_test(&conn, 1);
+        assert_matches!(res, Ok(x) if x.is_done == true);
         Ok(())
     }
 
@@ -196,14 +208,12 @@ mod tests {
         assert_eq!(add_item_to_table_for_test(&conn, "do laundry", true)?, 1);
         assert_eq!(add_item_to_table_for_test(&conn, "get milk", false)?, 1);
 
-        let a = list_items(&conn, ItemCommand::List);
-        println!("{:#?}", a);
         let num_rows_affected = exec(&conn, ItemCommand::Remove(1))?;
-        let b = list_items(&conn, ItemCommand::List);
-        println!("{:#?}", b);
         assert_eq!(num_rows_affected, 1);
-        let res = get_note_by_id_for_test(&conn);
-        assert_matches!(res, Err(_));
+        let row_one_res = get_note_by_id_for_test(&conn, 1);
+        assert_matches!(row_one_res, Err(_));
+        let row_two_res = get_note_by_id_for_test(&conn, 2);
+        assert_matches!(row_two_res, Ok(x) if x.note == String::from("get milk"));
         Ok(())
     }
 }
