@@ -5,32 +5,36 @@ use std::time::Duration;
 use console::Term;
 use colored::Colorize;
 use rusqlite::{Connection, OpenFlags, Result};
+use std::os::unix::fs;
+use std::os::unix::io;
 
 use clap::{crate_authors, crate_version, value_parser, Arg, ArgMatches, Command};
 
-fn parse_args() -> Result<ItemCommand, Box<dyn std::error::Error>> {
-
-    let arg_matches: ArgMatches = Command::new("clap")
+fn parse_args() -> Result<(ItemCommand, String), Box<dyn std::error::Error>> {
+    let mut arg_matches: ArgMatches = Command::new("clap")
         .allow_external_subcommands(true)
         .version(crate_version!())
         .author(crate_authors!("\n"))
+            .arg(Arg::new("db-file")
+            .value_parser(value_parser!(String))
+            .long("file")
+            .help("specify custom database file to read and write from. If the database file entered does not exist, then it is created. If this option is not specified, then the default file name will be used, todo.db"))
             .subcommands(
             [
                 Command::new("add").about("add new item to todo").arg(Arg::new("add")),
                 Command::new("done").about("set existing item to done").arg(Arg::new("done").value_parser(value_parser!(usize))),
                 Command::new("remove").about("remove existing item from todo list").arg(Arg::new("remove").value_parser(value_parser!(usize))),
             ])
-            .arg(Arg::new("files")
-            .num_args(0..)
-            .value_parser(value_parser!(String))
-        )
         .try_get_matches()?;
+
+    let db_file_name: String = arg_matches.remove_one::<String>("db-file").unwrap_or(String::from("todo.db"));
+
     match arg_matches.subcommand() {
-        Some(("add", val)) => Ok(ItemCommand::Add(val.get_many::<String>("add").unwrap().map(|s| s.as_str()).collect())),
-        Some(("done", val)) => Ok(ItemCommand::Done(*val.get_one::<usize>("done").unwrap())),
-        Some(("remove", val)) => Ok(ItemCommand::Remove(*val.get_one::<usize>("remove").unwrap())),
+        Some(("add", val)) => Ok((ItemCommand::Add(val.get_many::<String>("add").unwrap().map(|s| s.as_str()).collect()), db_file_name)),
+        Some(("done", val)) => Ok((ItemCommand::Done(*val.get_one::<usize>("done").unwrap()), db_file_name)),
+        Some(("remove", val)) => Ok((ItemCommand::Remove(*val.get_one::<usize>("remove").unwrap()), db_file_name)),
         Some((_, _)) => panic!("Please provide a subcommand"),
-        None => Ok(ItemCommand::List)
+        None => Ok((ItemCommand::List, db_file_name))
     }
 
 }
@@ -107,9 +111,9 @@ fn list_items(conn: &Connection, item: ItemCommand) -> Result<usize, Box<dyn std
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>>{
-    let database_path = "./todo.db";
-    let mut conn = Connection::open_with_flags(database_path,
-    OpenFlags::SQLITE_OPEN_READ_WRITE
+    let (command, database_path) = parse_args()?;
+    let mut conn = Connection::open_with_flags(&database_path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_URI
         | OpenFlags::SQLITE_OPEN_NO_MUTEX);
 
@@ -118,14 +122,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
         create_item_table(&conn.as_ref().unwrap())?;
     }
 
-
-
-
-
     // term.write_line("Hello World!")?;
     // thread::sleep(Duration::from_millis(2000));
     // term.clear_line()?;
-    let command = parse_args()?;
+
     let _ = exec(&conn.unwrap(), command)?;
     Ok(())
 }
@@ -134,6 +134,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
 mod tests {
     use std::assert_matches::assert_matches;
     use rusqlite::named_params;
+    use std::process::Command;
+    use assert_cmd::prelude::*;
+
+    use tempfile::TempDir;
 
     use super::*;
 
@@ -214,6 +218,30 @@ mod tests {
         assert_matches!(row_one_res, Err(_));
         let row_two_res = get_note_by_id_for_test(&conn, 2);
         assert_matches!(row_two_res, Ok(x) if x.note == String::from("get milk"));
+        Ok(())
+    }
+
+    #[test]
+    fn some_test() -> Result<(), Box<dyn std::error::Error>> {
+
+        let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME"))?;
+        cmd.arg("add do laundry");
+
+        let assertion = cmd.assert().try_success()?;
+        Ok(())
+
+    }
+
+    #[test]
+    fn test_db_creation() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_name = temp_dir.path().to_str().unwrap();
+        let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME"))?;
+        println!("--db-file {}/mytodo.db", db_name);
+        cmd.arg(format!("--db-file {}/mytodo.db", db_name));
+
+        let assertion = cmd.assert().try_success()?;
+        // Teardown
         Ok(())
     }
 }
