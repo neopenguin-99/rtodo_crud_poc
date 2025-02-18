@@ -11,13 +11,14 @@ use std::os::unix::io;
 use clap::{crate_authors, crate_version, value_parser, Arg, ArgMatches, Command};
 
 fn parse_args() -> Result<(ItemCommand, String), Box<dyn std::error::Error>> {
+    let default_db_file_name = String::from("todo.db");
     let mut arg_matches: ArgMatches = Command::new("clap")
         .allow_external_subcommands(true)
         .version(crate_version!())
         .author(crate_authors!("\n"))
-            .arg(Arg::new("db-file")
+            .arg(Arg::new("d")
             .value_parser(value_parser!(String))
-            .long("file")
+            .short('d')
             .help("specify custom database file to read and write from. If the database file entered does not exist, then it is created. If this option is not specified, then the default file name will be used, todo.db"))
             .subcommands(
             [
@@ -27,13 +28,14 @@ fn parse_args() -> Result<(ItemCommand, String), Box<dyn std::error::Error>> {
             ])
         .try_get_matches()?;
 
-    let db_file_name: String = arg_matches.remove_one::<String>("db-file").unwrap_or(String::from("todo.db"));
+    let db_file_name: String = arg_matches.remove_one::<String>("d").unwrap_or(default_db_file_name.clone());
 
     match arg_matches.subcommand() {
         Some(("add", val)) => Ok((ItemCommand::Add(val.get_many::<String>("add").unwrap().map(|s| s.as_str()).collect()), db_file_name)),
         Some(("done", val)) => Ok((ItemCommand::Done(*val.get_one::<usize>("done").unwrap()), db_file_name)),
         Some(("remove", val)) => Ok((ItemCommand::Remove(*val.get_one::<usize>("remove").unwrap()), db_file_name)),
-        Some((_, _)) => panic!("Please provide a subcommand"),
+        Some((_, _)) if db_file_name == default_db_file_name => panic!("Please provide a subcommand"),
+        Some((_, _)) => Ok((ItemCommand::List, db_file_name)),
         None => Ok((ItemCommand::List, db_file_name))
     }
 
@@ -235,13 +237,23 @@ mod tests {
     #[test]
     fn test_db_creation() -> Result<(), Box<dyn std::error::Error>> {
         let temp_dir = TempDir::new()?;
-        let db_name = temp_dir.path().to_str().unwrap();
+        let db_path = temp_dir.path().to_str().unwrap();
         let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME"))?;
-        println!("--db-file {}/mytodo.db", db_name);
-        cmd.arg(format!("--db-file {}/mytodo.db", db_name));
+        println!("{}", db_path);
+        let args: String = format!("-d {}/mytodo.db", db_path);
+        cmd.arg(args);
 
         let assertion = cmd.assert().try_success()?;
         // Teardown
+        Ok(())
+    }
+
+    #[test]
+    fn test_db_subcommands_passed_to_exec() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().to_str().unwrap();
+        let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME"))?;
+        println!("{}", db_path);
         Ok(())
     }
 }
