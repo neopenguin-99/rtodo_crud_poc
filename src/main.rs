@@ -1,4 +1,5 @@
 #![feature(assert_matches)]
+#![feature(custom_test_frameworks)]
 use std::thread;
 use std::time::Duration;
 
@@ -7,6 +8,8 @@ use colored::Colorize;
 use rusqlite::{Connection, OpenFlags, Result};
 use std::os::unix::fs;
 use std::os::unix::io;
+use log::{info, trace, warn};
+
 
 use clap::{crate_authors, crate_version, value_parser, Arg, ArgMatches, Command};
 
@@ -56,6 +59,7 @@ enum ItemCommand {
 }
 
 fn create_item_table(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    trace!("create_item_table");
     conn.execute("CREATE TABLE item (
         id INTEGER PRIMARY KEY,
         note TEXT NOT NULL,
@@ -65,16 +69,19 @@ fn create_item_table(conn: &Connection) -> Result<(), Box<dyn std::error::Error>
 }
 
 fn insert_into_item_table(conn: &Connection, note: String) -> Result<usize, Box<dyn std::error::Error>> {
+    trace!("insert_into_item_table");
     let rows = conn.execute("INSERT INTO item (note, is_done) VALUES (?1, ?2)", (note, false));
     Ok(rows?)
 }
 
 fn set_item_as_done(conn: &Connection, id: usize) -> Result<usize, Box<dyn std::error::Error>> {
+    trace!("set_item_as_done");
     let rows = conn.execute("UPDATE item SET is_done = ?1 WHERE id = ?2", (true, id));
     Ok(rows?)
 }
 
 fn remove_item(conn: &Connection, id: usize) -> Result<usize, Box<dyn std::error::Error>> {
+    trace!("remove_item");
     let rows = conn.execute("DELETE FROM item WHERE id = ?1", ((id),));
     Ok(rows?)
 }
@@ -90,6 +97,7 @@ fn exec(conn: &Connection, item: ItemCommand) -> Result<usize, Box<dyn std::erro
 
 fn list_items(conn: &Connection, item: ItemCommand) -> Result<usize, Box<dyn std::error::Error>> {
     _ = item;
+    trace!("list_items");
     let mut stmt = conn.prepare("SELECT id, note, is_done FROM item")?;
     let item_iter = stmt.query_map([], |row| {
         Ok(Item {
@@ -140,6 +148,7 @@ mod tests {
     use assert_cmd::prelude::*;
 
     use tempfile::TempDir;
+    use test_case::test_case;
 
     use super::*;
 
@@ -248,11 +257,15 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_db_subcommands_passed_to_exec() -> Result<(), Box<dyn std::error::Error>> {
+    #[test_case("add" ; "add a new item")]
+    #[test_case("list" ; "show items in todo list")]
+    #[test_case("done" ; "set item in todo list to done")]
+    #[test_case("remove" ; "remove item from todo list")]
+    fn test_db_subcommands_passed_to_exec(subcommand: &str) -> Result<(), Box<dyn std::error::Error>> {
         let temp_dir = TempDir::new()?;
         let db_path = temp_dir.path().to_str().unwrap();
         let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME"))?;
+        let args: String = format!("-d {}/mytodo.db {}", db_path, subcommand);
         println!("{}", db_path);
         Ok(())
     }
