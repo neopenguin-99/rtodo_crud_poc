@@ -1,14 +1,9 @@
 #![feature(assert_matches)]
 #![feature(custom_test_frameworks)]
-use std::thread;
-use std::time::Duration;
 
-use console::Term;
 use colored::Colorize;
 use rusqlite::{Connection, OpenFlags, Result};
-use std::os::unix::fs;
-use std::os::unix::io;
-use log::{info, trace, warn};
+use log::trace;
 
 
 use clap::{crate_authors, crate_version, value_parser, Arg, ArgMatches, Command};
@@ -32,6 +27,7 @@ fn parse_args() -> Result<(ItemCommand, String), Box<dyn std::error::Error>> {
         .try_get_matches()?;
 
     let db_file_name: String = arg_matches.remove_one::<String>("d").unwrap_or(default_db_file_name.clone());
+    println!("{}", db_file_name);
 
     match arg_matches.subcommand() {
         Some(("add", val)) => Ok((ItemCommand::Add(val.get_many::<String>("add").unwrap().map(|s| s.as_str()).collect()), db_file_name)),
@@ -132,10 +128,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
         create_item_table(&conn.as_ref().unwrap())?;
     }
 
-    // term.write_line("Hello World!")?;
-    // thread::sleep(Duration::from_millis(2000));
-    // term.clear_line()?;
-
     let _ = exec(&conn.unwrap(), command)?;
     Ok(())
 }
@@ -149,6 +141,7 @@ mod tests {
 
     use tempfile::TempDir;
     use test_case::test_case;
+    use predicate::prelude;
 
     use super::*;
 
@@ -252,21 +245,25 @@ mod tests {
         let args: String = format!("-d {}/mytodo.db", db_path);
         cmd.arg(args);
 
-        let assertion = cmd.assert().try_success()?;
+        let _ = cmd.assert().try_success()?;
         // Teardown
         Ok(())
     }
 
-    #[test_case("add" ; "add a new item")]
-    #[test_case("list" ; "show items in todo list")]
-    #[test_case("done" ; "set item in todo list to done")]
-    #[test_case("remove" ; "remove item from todo list")]
-    fn test_db_subcommands_passed_to_exec(subcommand: &str) -> Result<(), Box<dyn std::error::Error>> {
+    #[test_case("add", "insert_into_item_table" ; "insert_into_item_table")]
+    #[test_case("list", "list_items" ; "list_items")]
+    #[test_case("done", "set_item_as_done" ; "set_item_as_done")]
+    #[test_case("remove", "remove_item" ; "remove_item")]
+    fn test_db_subcommands_passed_to_exec(subcommand: &str, expected_stdout_from_trace: &str) -> Result<(), Box<dyn std::error::Error>> {
         let temp_dir = TempDir::new()?;
         let db_path = temp_dir.path().to_str().unwrap();
         let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME"))?;
         let args: String = format!("-d {}/mytodo.db {}", db_path, subcommand);
-        println!("{}", db_path);
+        cmd.arg(&args);
+        println!("{}", args);
+
+        let assertion = cmd.assert().try_success()?;
+        assertion.stdout(predicate::str::diff("hello\n"));
         Ok(())
     }
 }
